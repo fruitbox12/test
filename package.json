@@ -9,6 +9,7 @@
   "dependencies": {
     "crypto": "latest",
     "express": "latest",
+        "socket.io": "latest",
     "hyperswarm": "latest",
     "ws": "latest"
   },
