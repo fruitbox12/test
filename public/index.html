@@ -25,7 +25,7 @@
             walletAddress = accounts[0];
             alert(`Connected: ${walletAddress}`);
 
-            ws = new WebSocket(`ws://${window.location.host}`);
+            ws = new WebSocket(`ws://${window.location.host}:3000`);
             ws.onmessage = async (message) => {
                 const { signal, wallet } = JSON.parse(message.data);
                 if (wallet !== walletAddress) {
