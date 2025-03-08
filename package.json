@@ -1,0 +1,18 @@
+{
+  "name": "hyperswarm-webrtc",
+  "version": "1.0.0",
+  "description": "A decentralized WebRTC video call app using Hyperswarm for peer discovery",
+  "main": "hyperswarm-server.js",
+  "scripts": {
+    "start": "node ws.js"
+  },
+  "dependencies": {
+    "crypto": "latest",
+    "express": "^4.21.2",
+    "hyperswarm": "^3.16.0",
+    "ws": "^8.16.0"
+  },
+  "type": "module",
+  "author": "Your Name",
+  "license": "MIT"
+}
