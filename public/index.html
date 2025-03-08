@@ -16,13 +16,16 @@
     <video id="remoteVideo" autoplay style="width:300px; background: #ccc;"></video>
   </div>
 
-  <!-- Socket.IO client script (automatically served by server.js) -->
+  <!-- Socket.IO client script (served by your server or via CDN) -->
   <script src="/socket.io/socket.io.js"></script>
   <script>
     let socket;
     let walletAddress = null;
     let peerConnection = null;
     let currentCallRecipient = null;
+
+    // Queue for ICE candidates that arrive before remoteDescription is set
+    let pendingCandidates = [];
 
     async function connectWallet() {
       if (!window.ethereum) {
@@ -45,37 +48,59 @@
 
         // Handle incoming SDP signals (offer/answer)
         socket.on('signal', async (data) => {
+          // We do NOT ignore if data.wallet === walletAddress,
+          // because we want the second tab with the same address to get signals.
+
           if (!peerConnection) {
             createPeerConnection();
           }
-          if (data.wallet.toLowerCase() !== walletAddress && data.signal) {
+          if (data.signal) {
             console.log('Received signal from', data.wallet, data.signal.type);
 
-            await peerConnection.setRemoteDescription(new RTCSessionDescription(data.signal));
+            try {
+              await peerConnection.setRemoteDescription(new RTCSessionDescription(data.signal));
+              console.log('Remote description set:', data.signal.type);
+            } catch (err) {
+              console.error('Failed to set remote description:', err);
+              return;
+            }
+
             // If it's an offer, create an answer
             if (data.signal.type === 'offer') {
               const answer = await peerConnection.createAnswer();
               await peerConnection.setLocalDescription(answer);
+
               // Send back the answer
               socket.emit('signal', {
                 wallet: data.wallet.toLowerCase(),
                 signal: answer
               });
             }
+
+            // Now that we have a remote description, handle any queued ICE candidates
+            handlePendingCandidates();
           }
         });
 
         // Handle incoming ICE candidates
         socket.on('candidate', async (data) => {
+          // Again, do NOT ignore if data.wallet === walletAddress
           if (!peerConnection) {
             createPeerConnection();
           }
           if (data.candidate) {
             console.log('Received ICE candidate from', data.wallet);
-            try {
-              await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
-            } catch (err) {
-              console.error('Error adding received ICE candidate', err);
+            // If remote description is not set yet, queue the candidate
+            if (!peerConnection.remoteDescription || !peerConnection.remoteDescription.type) {
+              console.log('Remote description not set yet. Queuing candidate.');
+              pendingCandidates.push(data.candidate);
+            } else {
+              // Remote description is ready, so we can add the candidate now
+              try {
+                await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+              } catch (err) {
+                console.error('Error adding received ICE candidate', err);
+              }
             }
           }
         });
@@ -104,7 +129,6 @@
         return;
       }
 
-      // Create the RTCPeerConnection
       createPeerConnection();
 
       // Get local camera/mic
@@ -116,7 +140,7 @@
       const offer = await peerConnection.createOffer();
       await peerConnection.setLocalDescription(offer);
 
-      // Send the offer to the server (who will relay to recipient)
+      // Send the offer to the server (which relays it to "recipient")
       socket.emit('signal', {
         wallet: recipient,
         signal: offer
@@ -137,7 +161,7 @@
         remoteVideo.srcObject = event.streams[0];
       };
 
-      // Send ICE candidates to the remote peer
+      // When ICE candidates are generated locally, send them to the remote
       peerConnection.onicecandidate = (event) => {
         if (event.candidate) {
           console.log('Sending ICE candidate to', currentCallRecipient);
@@ -147,6 +171,17 @@
           });
         }
       };
+    }
+
+    function handlePendingCandidates() {
+      pendingCandidates.forEach(async (candidateObj) => {
+        try {
+          await peerConnection.addIceCandidate(new RTCIceCandidate(candidateObj));
+        } catch (err) {
+          console.error('Error adding queued ICE candidate', err);
+        }
+      });
+      pendingCandidates = [];
     }
   </script>
 </body>
