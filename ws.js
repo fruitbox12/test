@@ -6,7 +6,6 @@ import crypto from 'crypto';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-// -- Basic setup
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -16,34 +15,34 @@ const io = new Server(server, {
   cors: { origin: '*' },
 });
 
-// -- Hyperswarm for topic-based discovery (optional, as in your original snippet)
+// Optional Hyperswarm usage
 const swarm = new Hyperswarm();
 function getTopic(walletAddress) {
   return crypto.createHash('sha256').update(walletAddress).digest();
 }
 
-// -- Keep track of which wallet is connected to which socket
+// Store multiple sockets per wallet:  wallet => Set<Socket>
 const walletPeers = new Map();
 
-// -- Serve static files from /public so we can load index.html and any assets
 app.use(express.static(path.join(__dirname, 'public')));
 
-// -- Handle all Socket.IO logic
 io.on('connection', (socket) => {
   console.log('New Socket.io connection:', socket.id);
 
-  // A wallet "joins" by telling us its address
   socket.on('join', (wallet) => {
     if (!wallet) return;
     const normalized = wallet.toLowerCase();
     console.log('Wallet joined:', normalized);
 
-    // Remember this socket for future calls to this wallet
-    walletPeers.set(normalized, socket);
+    if (!walletPeers.has(normalized)) {
+      walletPeers.set(normalized, new Set());
+      // Optionally join the Hyperswarm topic if you want
+      const topic = getTopic(normalized);
+      swarm.join(topic, { server: true });
+    }
 
-    // Also join the Hyperswarm topic (optional)
-    const topic = getTopic(normalized);
-    swarm.join(topic, { server: true });
+    // Add this socket to the set for that wallet
+    walletPeers.get(normalized).add(socket);
   });
 
   // Relay SDP signals (offer/answer)
@@ -52,11 +51,15 @@ io.on('connection', (socket) => {
     const normalized = data.wallet.toLowerCase();
     console.log(`Relaying SDP signal to wallet: ${normalized}`);
 
-    const recipientSocket = walletPeers.get(normalized);
-    if (recipientSocket) {
-      recipientSocket.emit('signal', data);
+    if (walletPeers.has(normalized)) {
+      for (const recipientSocket of walletPeers.get(normalized)) {
+        // don't send back to the same socket that sent it
+        if (recipientSocket.id !== socket.id) {
+          recipientSocket.emit('signal', data);
+        }
+      }
     } else {
-      console.warn(`No socket found for wallet ${normalized}`);
+      console.warn(`No socket set found for wallet ${normalized}`);
     }
   });
 
@@ -66,29 +69,34 @@ io.on('connection', (socket) => {
     const normalized = data.wallet.toLowerCase();
     console.log(`Relaying ICE candidate to wallet: ${normalized}`);
 
-    const recipientSocket = walletPeers.get(normalized);
-    if (recipientSocket) {
-      recipientSocket.emit('candidate', data);
+    if (walletPeers.has(normalized)) {
+      for (const recipientSocket of walletPeers.get(normalized)) {
+        if (recipientSocket.id !== socket.id) {
+          recipientSocket.emit('candidate', data);
+        }
+      }
     } else {
-      console.warn(`No socket found for wallet ${normalized}`);
+      console.warn(`No socket set found for wallet ${normalized}`);
     }
   });
 
-  // Handle disconnection
+  // On disconnect, remove this socket from whichever wallet set it's in
   socket.on('disconnect', () => {
     console.log('Client disconnected:', socket.id);
-    // Optionally remove from walletPeers:
-    for (const [wallet, s] of walletPeers.entries()) {
-      if (s === socket) {
-        walletPeers.delete(wallet);
-        console.log(`Removed wallet ${wallet} from peers map`);
+    for (const [wallet, socketSet] of walletPeers.entries()) {
+      if (socketSet.has(socket)) {
+        socketSet.delete(socket);
+        console.log(`Removed socket ${socket.id} from wallet ${wallet}`);
+        if (socketSet.size === 0) {
+          walletPeers.delete(wallet);
+          console.log(`No more connections for wallet ${wallet}, removed from map`);
+        }
         break;
       }
     }
   });
 });
 
-// -- Start server on port 3000
 const PORT = 3000;
 server.listen(PORT, () => {
   console.log(`Server is running on http://localhost:${PORT}`);
