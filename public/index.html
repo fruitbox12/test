@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Crypto Wallet WebRTC Calls</title>
+    <script src="/socket.io/socket.io.js"></script>
 </head>
 <body>
     <h2>Call via Crypto Wallet</h2>
@@ -14,7 +15,7 @@
     <video id="remoteVideo" autoplay></video>
 
     <script>
-        let ws, walletAddress, peerConnection;
+        let socket, walletAddress, peerConnection;
 
         async function connectWallet() {
             if (!window.ethereum) {
@@ -25,23 +26,38 @@
             walletAddress = accounts[0];
             alert(`Connected: ${walletAddress}`);
 
-            ws = new WebSocket(`ws://${window.location.host}:3000`);
-            ws.onmessage = async (message) => {
-                const { signal, wallet } = JSON.parse(message.data);
-                if (wallet !== walletAddress) {
-                    await peerConnection.setRemoteDescription(new RTCSessionDescription(signal));
-                    if (signal.type === 'offer') {
+            socket = io();
+
+            socket.on('connect', () => {
+                console.log("Socket.io connected");
+                socket.emit('join', walletAddress);
+            });
+
+            socket.on('signal', async (data) => {
+                if (data.wallet !== walletAddress) {
+                    await peerConnection.setRemoteDescription(new RTCSessionDescription(data.signal));
+                    if (data.signal.type === 'offer') {
                         const answer = await peerConnection.createAnswer();
                         await peerConnection.setLocalDescription(answer);
-                        ws.send(JSON.stringify({ wallet: walletAddress, signal: answer }));
+                        socket.emit('signal', { wallet: walletAddress, signal: answer });
                     }
                 }
-            };
+            });
+
+            socket.on('disconnect', () => {
+                console.log("Socket.io disconnected. Attempting reconnect...");
+                setTimeout(connectWallet, 3000);
+            });
         }
 
         async function startCall() {
             const recipient = document.getElementById('recipientAddress').value;
             if (!recipient) return alert('Enter wallet address to call');
+
+            if (!socket || !socket.connected) {
+                alert("Socket.io is not connected. Try reconnecting your wallet.");
+                return;
+            }
 
             peerConnection = new RTCPeerConnection({
                 iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
@@ -57,7 +73,8 @@
 
             const offer = await peerConnection.createOffer();
             await peerConnection.setLocalDescription(offer);
-            ws.send(JSON.stringify({ wallet: recipient, signal: offer }));
+
+            socket.emit('signal', { wallet: recipient, signal: offer });
         }
     </script>
 </body>
