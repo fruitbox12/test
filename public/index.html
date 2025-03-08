@@ -1,81 +1,139 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Crypto Wallet WebRTC Calls</title>
-    <script src="/socket.io/socket.io.js"></script>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Crypto Wallet WebRTC Calls</title>
+  <!-- Include socket.io client -->
+  <script src="/socket.io/socket.io.js"></script>
 </head>
 <body>
-    <h2>Call via Crypto Wallet</h2>
-    <button onclick="connectWallet()">Connect Wallet</button>
-    <input id="recipientAddress" placeholder="Enter wallet to call">
-    <button onclick="startCall()">Call</button>
-    <video id="localVideo" autoplay muted></video>
-    <video id="remoteVideo" autoplay></video>
+  <h2>Call via Crypto Wallet</h2>
+  <button onclick="connectWallet()">Connect Wallet</button>
+  <input id="recipientAddress" placeholder="Enter wallet to call" />
+  <button onclick="startCall()">Call</button>
+  <video id="localVideo" autoplay muted></video>
+  <video id="remoteVideo" autoplay></video>
 
-    <script>
-        let socket, walletAddress, peerConnection;
+  <script>
+    let socket, walletAddress, peerConnection;
+    let currentCallRecipient = null;
 
-        async function connectWallet() {
-            if (!window.ethereum) {
-                alert('Install MetaMask');
-                return;
+    async function connectWallet() {
+      if (!window.ethereum) {
+        alert('Please install MetaMask or another Ethereum wallet.');
+        return;
+      }
+      try {
+        const accounts = await ethereum.request({ method: 'eth_requestAccounts' });
+        walletAddress = accounts[0];
+        alert(`Connected wallet: ${walletAddress}`);
+
+        // Initialize Socket.io connection
+        socket = io();
+
+        socket.on('connect', () => {
+          console.log("Socket.io connected:", socket.id);
+          // Join your wallet "room" on the server
+          socket.emit('join', walletAddress);
+        });
+
+        // Handle incoming signals (offer/answer)
+        socket.on('signal', async (data) => {
+          if (!peerConnection) {
+            createPeerConnection();
+          }
+          if (data.wallet !== walletAddress && data.signal) {
+            console.log('Received SDP signal from:', data.wallet, data.signal.type);
+
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(data.signal));
+            // If we got an offer, create an answer
+            if (data.signal.type === 'offer') {
+              const answer = await peerConnection.createAnswer();
+              await peerConnection.setLocalDescription(answer);
+              socket.emit('signal', { wallet: data.wallet, signal: answer });
             }
-            const accounts = await ethereum.request({ method: 'eth_requestAccounts' });
-            walletAddress = accounts[0];
-            alert(`Connected: ${walletAddress}`);
+          }
+        });
 
-            socket = io();
-
-            socket.on('connect', () => {
-                console.log("Socket.io connected");
-                socket.emit('join', walletAddress);
-            });
-
-            socket.on('signal', async (data) => {
-                if (data.wallet !== walletAddress) {
-                    await peerConnection.setRemoteDescription(new RTCSessionDescription(data.signal));
-                    if (data.signal.type === 'offer') {
-                        const answer = await peerConnection.createAnswer();
-                        await peerConnection.setLocalDescription(answer);
-                        socket.emit('signal', { wallet: walletAddress, signal: answer });
-                    }
-                }
-            });
-
-            socket.on('disconnect', () => {
-                console.log("Socket.io disconnected. Attempting reconnect...");
-                setTimeout(connectWallet, 3000);
-            });
-        }
-
-        async function startCall() {
-            const recipient = document.getElementById('recipientAddress').value;
-            if (!recipient) return alert('Enter wallet address to call');
-
-            if (!socket || !socket.connected) {
-                alert("Socket.io is not connected. Try reconnecting your wallet.");
-                return;
+        // Handle incoming ICE candidates
+        socket.on('candidate', async (data) => {
+          if (!peerConnection) {
+            createPeerConnection();
+          }
+          if (data.candidate) {
+            console.log('Received ICE candidate from:', data.wallet);
+            try {
+              await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+            } catch (err) {
+              console.error('Error adding ICE candidate', err);
             }
+          }
+        });
 
-            peerConnection = new RTCPeerConnection({
-                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-            });
+        // Attempt auto-reconnect if disconnected
+        socket.on('disconnect', () => {
+          console.log("Socket.io disconnected. Attempting reconnect in 3s...");
+          setTimeout(connectWallet, 3000);
+        });
+      } catch (err) {
+        console.error('Error connecting wallet:', err);
+      }
+    }
 
-            const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-            document.getElementById('localVideo').srcObject = stream;
-            stream.getTracks().forEach(track => peerConnection.addTrack(track, stream));
+    async function startCall() {
+      const recipient = document.getElementById('recipientAddress').value;
+      if (!recipient) {
+        alert('Enter a wallet address to call');
+        return;
+      }
+      if (!socket || !socket.connected) {
+        alert("Socket.io is not connected. Try reconnecting your wallet.");
+        return;
+      }
 
-            peerConnection.ontrack = (event) => {
-                document.getElementById('remoteVideo').srcObject = event.streams[0];
-            };
+      currentCallRecipient = recipient;
 
-            const offer = await peerConnection.createOffer();
-            await peerConnection.setLocalDescription(offer);
+      createPeerConnection();
 
-            socket.emit('signal', { wallet: recipient, signal: offer });
+      // Get local camera/mic
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      document.getElementById('localVideo').srcObject = stream;
+      // Add tracks to peerConnection
+      stream.getTracks().forEach(track => peerConnection.addTrack(track, stream));
+
+      // Create SDP offer
+      const offer = await peerConnection.createOffer();
+      await peerConnection.setLocalDescription(offer);
+
+      // Send offer to the server, specifying who we want to call
+      socket.emit('signal', { wallet: recipient, signal: offer });
+    }
+
+    function createPeerConnection() {
+      if (peerConnection) return; // avoid re-creating
+
+      peerConnection = new RTCPeerConnection({
+        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+      });
+
+      // When we get a remote track, display in remoteVideo
+      peerConnection.ontrack = (event) => {
+        const remoteVideo = document.getElementById('remoteVideo');
+        remoteVideo.srcObject = event.streams[0];
+      };
+
+      // Collect ICE candidates and send to remote peer
+      peerConnection.onicecandidate = (event) => {
+        if (event.candidate) {
+          console.log('Sending ICE candidate to:', currentCallRecipient);
+          socket.emit('candidate', {
+            wallet: currentCallRecipient,
+            candidate: event.candidate,
+          });
         }
-    </script>
+      };
+    }
+  </script>
 </body>
 </html>
