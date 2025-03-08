@@ -8,9 +8,9 @@
   },
   "dependencies": {
     "crypto": "latest",
-    "express": "^4.21.2",
-    "hyperswarm": "^3.16.0",
-    "ws": "^8.16.0"
+    "express": "latest",
+    "hyperswarm": "latest",
+    "ws": "latest"
   },
   "type": "module",
   "author": "Your Name",
