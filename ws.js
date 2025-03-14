@@ -9,13 +9,16 @@ console.log('WebSocket signaling server running on ws://localhost:3000');
 // In-memory store for clients: walletAddress -> WebSocket
 const clients = new Map();
 
-// Create a new Hyperswarm instance
+// Set up Hyperswarm for decentralized signaling
 const swarm = new hyperswarm();
+
+// Listen for incoming P2P connections via Hyperswarm
 swarm.on('connection', (socket, info) => {
   console.log('Hyperswarm got a connection', info);
   socket.on('data', data => {
     try {
       const msg = JSON.parse(data.toString());
+      // Route message to local client if available
       const targetAddr = msg.target;
       const clientWs = clients.get(targetAddr?.toLowerCase());
       if (clientWs) {
@@ -43,6 +46,7 @@ function verifySignature(message, address, signature) {
   }
 }
 
+// Fixed login message – in production, use a one-time nonce instead
 const LOGIN_MESSAGE = "Sign this message to log in to the P2P call app";
 
 wss.on('connection', ws => {
@@ -70,6 +74,7 @@ wss.on('connection', ws => {
           break;
         }
         case 'call': {
+          // Initiate a call: A calling B
           const { target } = msg;
           const from = ws.address;
           if (!from) {
@@ -82,9 +87,11 @@ wss.on('connection', ws => {
           }
           const targetWs = clients.get(target.toLowerCase());
           if (targetWs) {
+            // Notify target of the incoming call
             targetWs.send(JSON.stringify({ type: 'incoming-call', from }));
             ws.send(JSON.stringify({ type: 'call-ack', target }));
           } else {
+            // Target is not connected to this server, look up via DHT
             console.log(`Target ${target} not on this server, looking up via DHT...`);
             const topic = createHash('sha256').update(target).digest();
             swarm.join(topic, { client: true, server: false });
@@ -94,9 +101,9 @@ wss.on('connection', ws => {
         }
         case 'offer':
         case 'answer':
-        case 'ice-candidate':
-        case 'filter': { // filter sync message
-          const { target, sdp, candidate, filter } = msg;
+        case 'ice-candidate': {
+          // Relay WebRTC signaling messages between peers
+          const { target, sdp, candidate } = msg;
           const from = ws.address;
           if (!from) {
             ws.send(JSON.stringify({ type: 'error', error: 'Not logged in' }));
@@ -106,7 +113,7 @@ wss.on('connection', ws => {
             ws.send(JSON.stringify({ type: 'error', error: 'No target specified' }));
             break;
           }
-          const relayMsg = { type: msg.type, from, sdp, candidate, filter, target };
+          const relayMsg = { type: msg.type, from, sdp, candidate, target };
           const targetWs = clients.get(target.toLowerCase());
           if (targetWs) {
             targetWs.send(JSON.stringify(relayMsg));
