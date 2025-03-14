@@ -35,46 +35,52 @@
   <script>
     // Frontend Script
     const LOGIN_MESSAGE = "Sign this message to log in to the P2P call app";
-const endpoints = [
-    'wss://test-ninx-production.up.railway.app',
-    'wss://test-gns5-production.up.railway.app'
-];
+  (async function initWebSocket() {
+    const endpoints = [
+      'wss://test-ninx-production.up.railway.app',
+      'wss://test-gns5-production.up.railway.app'
+    ];
 
-let ws;
-let connected = false;
+    let ws;
+    let connected = false;
 
-for (const endpoint of endpoints) {
-    try {
+    for (const endpoint of endpoints) {
+      try {
         ws = new WebSocket(endpoint);
-        
+
         ws.onopen = () => {
-            console.log(`Connected to ${endpoint}`);
-            connected = true;
+          console.log(`Connected to ${endpoint}`);
+          connected = true;
         };
 
         ws.onerror = (error) => {
-            console.error(`WebSocket error on ${endpoint}`, error);
-            if (!connected) {
-                ws.close();
-            }
+          console.error(`WebSocket error on ${endpoint}`, error);
+          if (!connected) {
+            ws.close();
+          }
         };
 
         ws.onclose = () => {
-            if (!connected) {
-                console.log(`Connection failed to ${endpoint}, trying next...`);
-            }
+          if (!connected) {
+            console.log(`Connection failed to ${endpoint}, trying next...`);
+          }
         };
 
-        await new Promise(resolve => setTimeout(resolve, 2000)); // Wait for connection attempt
+        // Wait for the connection attempt to resolve
+        await new Promise(resolve => setTimeout(resolve, 2000));
         if (connected) break; // Stop trying if connected
-    } catch (err) {
+      } catch (err) {
         console.error(`Failed to connect to ${endpoint}:`, err);
+      }
     }
-}
 
-if (!connected) {
-    console.error("Failed to connect to any WebSocket endpoint.");
-}
+    if (!connected) {
+      console.error("Failed to connect to any WebSocket endpoint.");
+    } else {
+      // Setup the rest of your WebSocket-dependent logic here
+      window.ws = ws; // make ws available globally if needed
+    }
+  })();
     let userAddress = null;
     let pc = null;             // RTCPeerConnection
     let localStream = null;    // MediaStream from getUserMedia
