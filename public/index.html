@@ -33,56 +33,9 @@
   <!-- Include ethers.js (CDN) BEFORE your custom script -->
   <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.1/dist/ethers.umd.min.js"></script>
   <script>
-    // Declare WebSocket globally so all parts of the script can access it.
-    let ws = null;
+    // Frontend Script
     const LOGIN_MESSAGE = "Sign this message to log in to the P2P call app";
-
-    // Initialize the WebSocket connection inside an async IIFE.
-    (async function initWebSocket() {
-      const endpoints = [
-        'wss://test-ninx-production.up.railway.app',
-        'wss://test-gns5-production.up.railway.app'
-      ];
-
-      let connected = false;
-
-      for (const endpoint of endpoints) {
-        try {
-          const socket = new WebSocket(endpoint);
-
-          socket.onopen = () => {
-            console.log(`Connected to ${endpoint}`);
-            connected = true;
-            ws = socket; // assign to the global variable
-          };
-
-          socket.onerror = (error) => {
-            console.error(`WebSocket error on ${endpoint}`, error);
-            if (!connected) {
-              socket.close();
-            }
-          };
-
-          socket.onclose = () => {
-            if (!connected) {
-              console.log(`Connection failed to ${endpoint}, trying next...`);
-            }
-          };
-
-          // Wait for a moment to see if connection succeeds
-          await new Promise(resolve => setTimeout(resolve, 2000));
-          if (connected) break; // Stop trying once connected
-        } catch (err) {
-          console.error(`Failed to connect to ${endpoint}:`, err);
-        }
-      }
-
-      if (!connected) {
-        console.error("Failed to connect to any WebSocket endpoint.");
-      }
-    })();
-
-    // Declare variables for login, call, and video handling
+    const ws = new WebSocket('wss://test-ninx-production.up.railway.app');
     let userAddress = null;
     let pc = null;             // RTCPeerConnection
     let localStream = null;    // MediaStream from getUserMedia
@@ -97,15 +50,10 @@
     const localVideo = document.getElementById('localVideo');
     const remoteVideo = document.getElementById('remoteVideo');
 
-    // Request account and sign message with MetaMask (using ethers.js)
+    // Request account and sign message with MetaMask (ethers.js)
     loginBtn.onclick = async () => {
       if (!window.ethereum) {
         alert("MetaMask is required to login.");
-        return;
-      }
-      // Ensure the WebSocket is connected before proceeding
-      if (!ws || ws.readyState !== WebSocket.OPEN) {
-        alert("WebSocket is not connected yet. Please wait a moment.");
         return;
       }
       try {
@@ -116,7 +64,7 @@
         const address = await signer.getAddress();
         // Sign the login message
         const signature = await signer.signMessage(LOGIN_MESSAGE);
-        // Send login request to the server via WebSocket
+        // Send login request to server
         const loginReq = { type: 'login', address, signature };
         ws.send(JSON.stringify(loginReq));
       } catch (err) {
@@ -127,13 +75,13 @@
 
     // Initialize WebRTC peer connection and event handlers
     function setupPeerConnection() {
-      // STUN server configuration to gather ICE candidates
+      // STUN server configuration (public STUN servers to get ICE candidates)
       const config = { 
         iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] 
       };
       pc = new RTCPeerConnection(config);
 
-      // When we get a local ICE candidate, send it to the peer via the signaling server
+      // When we get a local ICE candidate, send it to the peer via server
       pc.onicecandidate = event => {
         if (event.candidate) {
           ws.send(JSON.stringify({
@@ -144,7 +92,7 @@
         }
       };
 
-      // When a remote track arrives, display it in the remote video element
+      // When remote track arrives, show it in the remote video element
       pc.ontrack = event => {
         console.log('Received remote track');
         if (remoteVideo.srcObject !== event.streams[0]) {
@@ -156,36 +104,36 @@
       localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
     }
 
-    // Handle messages received from the signaling server
-    ws && (ws.onmessage = async (event) => {
+    // Handle messages from the signaling server
+    ws.onmessage = async (event) => {
       const msg = JSON.parse(event.data);
       console.log('Received message', msg);
       switch (msg.type) {
         case 'login-success':
           userAddress = msg.address;
           loginStatus.textContent = "Connected as: " + userAddress;
-          // Show the call UI once logged in
+          // Show call UI
           callSection.style.display = 'block';
           break;
         case 'incoming-call':
-          // Another user is calling
+          // Another user is calling us
           const caller = msg.from;
           peerAddressInput.value = caller;
           alert(`Incoming call from ${caller}!`);
-          startCall(false); // Start call as callee (don't create offer immediately)
+          startCall(false); // start call as callee (don't create offer immediately)
           break;
         case 'call-ack':
-          // Server confirmed target is available; proceed as caller
-          startCall(true);
+          // Server confirmed target is available, proceed to make an offer
+          startCall(true); // as caller
           break;
         case 'offer':
-          // Received a WebRTC offer from a caller
+          // Received WebRTC offer from a caller
           if (!pc) {
-            console.log('Offer received, setting up peer connection as callee');
+            console.log('Offer received, setting up peer connection (callee)');
             await startCall(false);
           }
           await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
-          // Create an answer and send it back
+          // Create answer and send back
           const answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
           ws.send(JSON.stringify({ 
@@ -195,11 +143,11 @@
           }));
           break;
         case 'answer':
-          // Received answer from callee (when acting as caller)
+          // Got answer from callee (we are the caller)
           await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
           break;
         case 'ice-candidate':
-          // Received an ICE candidate from peer
+          // Received ICE candidate from peer
           if (pc && msg.candidate) {
             try {
               await pc.addIceCandidate(msg.candidate);
@@ -213,9 +161,9 @@
           alert(msg.error);
           break;
       }
-    });
+    };
 
-    // Start a call. If isCaller is true, create an offer; otherwise, wait for the offer.
+    // Start a call. If isCaller, we create the offer; if not, we wait for the offer.
     async function startCall(isCaller) {
       // Get media only once and reuse stream if already active
       if (!localStream) {
@@ -227,12 +175,12 @@
           return;
         }
       }
-      // Show the video elements
+      // Show video elements
       videoSection.style.display = 'block';
-      // Create the peer connection and add tracks
+      // Create peer connection and add tracks
       setupPeerConnection();
       if (isCaller) {
-        // As the caller, create an offer and send it to the callee
+        // Caller: create an offer and send to the callee
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
         ws.send(JSON.stringify({ 
@@ -243,7 +191,7 @@
       }
     }
 
-    // Call button initiates the call signaling process
+    // Call button initiates the call signaling
     callBtn.onclick = () => {
       const target = peerAddressInput.value.trim();
       if (!target) {
@@ -254,9 +202,9 @@
         alert("You must login first.");
         return;
       }
-      // Send a call request to the server
+      // Send call request to server
       ws.send(JSON.stringify({ type: 'call', target }));
-      // The offer will be created once a 'call-ack' message is received
+      // (We wait for 'call-ack' before creating offer)
     };
   </script>
 </body>
