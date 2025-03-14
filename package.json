@@ -11,7 +11,8 @@
     "express": "latest",
         "socket.io": "latest",
     "hyperswarm": "latest",
-    "ws": "latest"
+    "ws": "latest",
+    "ethers": "latest"
   },
   "type": "module",
   "author": "Your Name",
